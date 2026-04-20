@@ -59,7 +59,7 @@ export const ingestTransaction = async (req: Request, res: Response) => {
     const fraudAnalysis = await fraudCheck(data, userBehaviour)
     const riskScore = fraudAnalysis.riskScore
 
-    if(riskScore > 50) 
+    if(riskScore > 30)
       try {
           await handleCase(fraudAnalysis, user.id)  
       } catch (error) {

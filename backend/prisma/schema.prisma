@@ -55,10 +55,11 @@ model Transaction {
 
 model Case {
   id            String     @id @default(uuid())
-  caseId        String     @default(uuid())
+  caseId        String     @unique @default(uuid()) 
   notes         String[]   @default([])
   status        CaseStatus @default(OPEN)
   totalRiskScore Int     @default(0)
+  assigned_to   String[]
 
   userId        String     @unique
   user          User       @relation(fields: [userId], references: [id])

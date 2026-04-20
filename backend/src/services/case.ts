@@ -15,7 +15,6 @@ export const handleCase = async(fraudAnalysis: fraudAnalysis, userId: string) =>
       orderBy: { createdAt: "desc" }
     });
 
-// TODO: aggregrate riskScore in existing case scores
 
     if(userCase) {
       const userAlert = await prisma.alert.create({
@@ -36,6 +35,13 @@ export const handleCase = async(fraudAnalysis: fraudAnalysis, userId: string) =>
         }
       })
 
+      await prisma.transaction.update({
+        where: { id: lastTxn!.id },
+        data: {
+          caseId: userCase.id
+        }
+      })
+
       return ({
         userAlert
       })
@@ -44,6 +50,9 @@ export const handleCase = async(fraudAnalysis: fraudAnalysis, userId: string) =>
       const newCase = await prisma.case.create({
         data: {
           userId: userId,
+          transaction: {
+            connect: {id: lastTxn!.id}
+          }
         }
       })
       const newAlert = await prisma.alert.create({
