@@ -6,8 +6,9 @@ import { fraudCheck } from "../services/engine.js";
 import { broadcastTransaction } from "../websockets/websockets.js";
 import { getUserBehaviour } from "../services/behaviour.js";
 import { handleCase } from "../services/case.js";
+import { redis } from "../lib/redis.js";
+import { getRecentTransactionsRedis } from "../services/redisHelpers.js";
 
-console.log("DB URL:", process.env.DATABASE_URL);
 const ingestionRouter = Router();
 
 export const getUserTransactions = async (userId: string, limit: number) => {
@@ -48,30 +49,53 @@ ingestionRouter.post("/", async (req: Request, res: Response) => {
         currency: data.currency,
         country: data.country,
         ip: data.ip,
+        status: "PENDING",
         timestamp: new Date(data.timestamp),
       },
     });
 
-    const last30txns = await getUserTransactions(user.id, 30);
+    const redisKey = `user:${user.id}:recent_txns`;
+    let last30txns = await getRecentTransactionsRedis(user.id);
+
+    if (last30txns.length < 30) {
+      last30txns = await getUserTransactions(user.id, 30);
+
+      const values = [...last30txns]
+        .reverse()
+        .map((txn) => JSON.stringify(txn));
+
+      if(values.length > 0){
+        await redis
+        .multi()
+        .del(redisKey)
+        .lpush(redisKey, ...values)
+        .ltrim(redisKey, 0, 29)
+        .expire(redisKey, 60 * 60 * 24)
+        .exec();
+      }
+    }
+
     const userBehaviour = await getUserBehaviour(last30txns);
 
     const fraudAnalysis = await fraudCheck(data, userBehaviour);
     const riskScore = fraudAnalysis.riskScore;
     let updatedTransaction;
-    const status = fraudAnalysis.flagged ? "FLAGGED" : "SUCCESS";
+    const status = fraudAnalysis.flagged ? "FLAGGED" : "PENDING";
 
     if (riskScore > 30)
       try {
-        await handleCase(fraudAnalysis, user.id);
-        updatedTransaction = await prisma.transaction.update({
-          where: {id: transaction.id},
-          data: {
-            status: status,
-            riskScore: fraudAnalysis.riskScore,
-            reasons: fraudAnalysis.reasons,
-            flagged: fraudAnalysis.flagged,
-          }
-        })
+        await prisma.$transaction(async (tx) => {
+          await handleCase(fraudAnalysis, user.id, tx);
+          updatedTransaction = await tx.transaction.update({
+            where: { id: transaction.id },
+            data: {
+              status: status,
+              riskScore: fraudAnalysis.riskScore,
+              reasons: fraudAnalysis.reasons,
+              flagged: fraudAnalysis.flagged,
+            },
+          });
+        });
       } catch (error) {
         console.log(error);
         return res.status(500).json({
@@ -80,7 +104,7 @@ ingestionRouter.post("/", async (req: Request, res: Response) => {
       }
     else {
       await prisma.user.update({
-        where: { userId: data.userId },
+        where: { id: user.id },
         data: { lastCountry: data.country },
       });
 
@@ -93,15 +117,30 @@ ingestionRouter.post("/", async (req: Request, res: Response) => {
           flagged: fraudAnalysis.flagged,
         },
       });
-      
-      if(updatedTransaction){
-        broadcastTransaction(updatedTransaction);
-      }
+    }
+    const cachePayload = {
+      amount: updatedTransaction?.amount,
+      country: updatedTransaction?.country,
+      timestamp: updatedTransaction?.timestamp,
+    };
+    try {
+      await redis
+        .multi()
+        .lpush(redisKey, JSON.stringify(cachePayload))
+        .ltrim(redisKey, 0, 29)
+        .expire(redisKey, 60 * 60 * 24)
+        .exec();
+    } catch (err) {
+      console.error("Redis cache update failed", err);
+    }
+
+    if (updatedTransaction) {
+      broadcastTransaction(updatedTransaction);
     }
 
     res.json({
       message: "Transaction processed",
-      transaction,
+      updatedTransaction,
     });
   } catch (error) {
     console.error(error);
@@ -111,6 +150,16 @@ ingestionRouter.post("/", async (req: Request, res: Response) => {
 
 ingestionRouter.get("/recent", async (req: Request, res: Response) => {
   try {
+    const cachekey = `transactions:recent`;
+
+    const cached = await redis.get(cachekey);
+
+    if(cached){
+      return res.json({
+        source: "cache",
+        transactions: JSON.parse(cached)
+      })
+    }
     const transactions = await prisma.transaction.findMany({
       orderBy: { createdAt: "desc" },
       take: 20,
@@ -126,7 +175,10 @@ ingestionRouter.get("/recent", async (req: Request, res: Response) => {
       },
     });
 
+    await redis.set(cachekey, JSON.stringify(transactions), "EX", 30);
+
     return res.json({
+      source: "database",
       transactions,
     });
   } catch (error) {
