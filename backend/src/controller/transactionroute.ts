@@ -85,7 +85,7 @@ ingestionRouter.post("/", async (req: Request, res: Response) => {
     if (riskScore > 30)
       try {
         await prisma.$transaction(async (tx) => {
-          await handleCase(fraudAnalysis, user.id, tx);
+          await handleCase(fraudAnalysis, user.id, transaction.transactionId);
           updatedTransaction = await tx.transaction.update({
             where: { id: transaction.id },
             data: {

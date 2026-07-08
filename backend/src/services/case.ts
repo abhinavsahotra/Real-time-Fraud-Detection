@@ -1,76 +1,91 @@
-import { prisma } from "../lib/prisma.js"
+import { prisma } from "../lib/prisma.js";
+import { redis } from "../lib/redis.js";
 import { fraudAnalysis } from "../types/transaction.js";
 
-export const handleCase = async(fraudAnalysis: fraudAnalysis, userId: string) => {
+export const handleCase = async (
+  fraudAnalysis: fraudAnalysis,
+  userId: string,
+  lastTxn: string,
+) => {
+  let caseId: string;
   const riskScore = fraudAnalysis.riskScore;
+  const caseKey = `user:${userId}:case`;
 
+  const cachedCaseId = await redis.get(caseKey);
   try {
-    const userCase = await prisma.case.findFirst({
-      where:{
-        userId: userId
-      }
-    })
-    const lastTxn = await prisma.transaction.findFirst({
-      where: { userId: userId },
-      orderBy: { createdAt: "desc" }
-    });
+    if (cachedCaseId) {
+      caseId = cachedCaseId;
 
-
-    if(userCase) {
-      const userAlert = await prisma.alert.create({
-        data: {
-          userId: userId,
-          caseId: userCase.id,
-          transactionId: lastTxn!.id,
-          riskScore: riskScore,
-          reasons: fraudAnalysis.reasons
-        }
-      })
       await prisma.case.update({
-        where: { id: userCase.id },
+        where: { id: caseId },
         data: {
           totalRiskScore: {
-            increment: riskScore
-          }
-        }
-      })
+            increment: riskScore,
+          },
+        },
+      });
+    } else {
+      const existingCase = await prisma.case.findUnique({
+        where: {
+          userId,
+        },
+      });
 
-      await prisma.transaction.update({
-        where: { id: lastTxn!.id },
-        data: {
-          caseId: userCase.id
-        }
-      })
+      if (existingCase) {
+        caseId = existingCase.id;
 
-      return ({
-        userAlert
-      })
+        await prisma.case.update({
+          where: {
+            id: caseId,
+          },
+          data: {
+            totalRiskScore: {
+              increment: riskScore,
+            },
+          },
+        });
+
+        await redis.set(caseKey, caseId, "EX", 60 * 60 * 24);
+      } else {
+
+        const newCase = await prisma.case.create({
+          data: {
+            userId,
+            totalRiskScore: riskScore,
+          },
+        });
+
+        caseId = newCase.id;
+
+        await redis.set(caseKey, caseId, "EX", 60 * 60 * 24);
+      }
     }
-    else{
-      const newCase = await prisma.case.create({
-        data: {
-          userId: userId,
-          transaction: {
-            connect: {id: lastTxn!.id}
-          }
-        }
-      })
-      const newAlert = await prisma.alert.create({
-        data: {
-          riskScore: fraudAnalysis.riskScore,
-          reasons: fraudAnalysis.reasons,
-          caseId: newCase.id,
-          userId: userId,
-          transactionId: lastTxn!.id,
-        }
-      })
-      return ({
-        newCase,
-        newAlert
-      })
-    }
+
+    const alert = await prisma.alert.create({
+      data: {
+        userId,
+        caseId,
+        transactionId: lastTxn,
+        riskScore,
+        reasons: fraudAnalysis.reasons,
+      },
+    });
+
+    await prisma.transaction.update({
+      where: {
+        transactionId: lastTxn,
+      },
+      data: {
+        caseId,
+      },
+    });
+
+    return {
+      caseId,
+      alert,
+    };
   } catch (error) {
-    console.log(error)
+    console.log(error);
     return error;
   }
-}
+};
