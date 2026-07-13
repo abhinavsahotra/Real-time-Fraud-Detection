@@ -4,21 +4,23 @@ const StatCard = ({
     title,
     value,
     icon,
-    trend
+    trend,
+    className
   }: {
     title: string;
     value: string | number;
-    icon: React.ReactNode;
+    icon?: React.ReactNode;
     trend?: number;
     trendLabel?: string;
+    className?: string
   }) => (
     <Card>
       <CardHeader className="flex justify-between mx-4 pb-2">
-        <CardTitle className="text-sm font-semibold">{title}</CardTitle>
+        <CardTitle className="text-sm font-semibold text-[#737373]">{title}</CardTitle>
         <div className="text-muted-foreground">{icon}</div>
       </CardHeader>
       <CardContent className="space-y-2 mx-4">
-        <div className="text-2xl font-bold">{value}</div>
+        <div className={`text-2xl font-bold ${className}`}>{value}</div>
         {trend !== undefined && (
           <div
             className={`text-xs font-medium flex items-center gap-1 ${

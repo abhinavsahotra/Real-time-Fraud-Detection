@@ -46,7 +46,7 @@ export function Navbar() {
   const pathname = usePathname();
 
   return (
-    <header className="bg-[#FAFAFA] border-r border-[#E6E6E6] w-60">
+    <header className="hidden md:block bg-[#FAFAFA] border-r border-[#E6E6E6] w-60">
       <div className="flex flex-col justify-center items-center mt-10">
         <div className="h-20">
           <h2 className="text-2xl font-bold">FraudGuard</h2>

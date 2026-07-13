@@ -28,4 +28,5 @@ export interface CaseStats {
   updatedAt: string
   totalRiskScore: number
   assigned_to: string[]
+  alert: string[]
 }
